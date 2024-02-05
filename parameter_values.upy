@@ -1,0 +1,129 @@
+from typing import List, Dict, Optional
+
+C_PARAMETER = "c parameter"
+DEFINE_DECLARE = "define,declare"
+TABLE_SEPARATOR_TEXT = "Table separator text"
+DEFAULT_SEPARATOR = "\t"
+
+def name() -> str:
+    """
+    Return the name of the ireport.
+    """
+    return "Parameters Table"
+
+def test_entity(ent) -> bool:
+    """
+    Check if the report is valid for the entity.
+    """
+    # This is valid for c functions with parameters
+    return ent.kind().check("c function") and ent.parameters()
+
+def init(report) -> None:
+    """
+    Configure the table separator.
+    """
+    report.options().text("septext", TABLE_SEPARATOR_TEXT, DEFAULT_SEPARATOR)
+
+def generate(report, ent) -> None:
+    """
+    Generate the report.
+    """
+    sep = report.options().lookup("septext")
+    report.entity(ent)
+    report.print(ent.name())
+    report.entity()
+    report.print(" Parameters Table:\n\n")
+    params = ent.parameters().split(",")
+    report.print("Call" + sep)
+    report.print(sep.join(params) + "\n")
+    process_defaults(report, ent, params, sep)
+    process_calls(report, ent, params, sep)
+
+def process_defaults(report, ent, params, sep) -> None:
+    """
+    Process default parameters.
+    """
+    def_value = {}
+    for ref in ent.refs(DEFINE_DECLARE, C_PARAMETER, True):
+        val = ref.ent().value()
+        if val:
+            for i in range(len(params)):
+                if params[i].endswith(ref.ent().name()):
+                    def_value[i] = val
+                    break
+    if len(def_value) > 0:
+        report.print("Default" + sep)
+        print_default_values(report, params, def_value, sep)
+
+def print_default_values(report, params, def_value, sep) -> None:
+    """
+    Print default values for each parameter.
+    """
+    for i in range(len(params)):
+        if i in def_value:
+            report.print(def_value[i])
+        if i != (len(params) - 1):
+            report.print(sep)
+    report.print("\n")
+
+def process_calls(report, ent, params, sep) -> None:
+    """
+    Process calls to the function.
+    """
+    lexercache = {} # Cache lexers for speed
+    for ref in ent.refs("callby"):
+        report.entity(ref.file())
+        report.print(ref.file().name())
+        report.entity()
+        report.syncfile(ref.file().longname(), ref.line(), ref.column())
+        report.print("(" + str(ref.line()) + ")")
+        report.syncfile()
+        report.print(sep)
+        cur_pos = 0
+        lexer = findlexer(ref.file(), lexercache)
+        if lexer:
+            lexeme = lexer.lexeme(ref.line(), ref.column())
+            parens = None
+            while lexeme and (parens is None or parens > 0):
+                if lexeme.token() == "Punctuation":
+                    if lexeme.text() == ')':
+                        parens -= 1
+                    elif lexeme.text() == '(':
+                        if parens:
+                            parens += 1
+                        else:
+                            parens = 1
+                            lexeme = lexeme.next()
+                            continue
+                if lexeme.token() == "Operator" and parens and parens == 1 and lexeme.text() == ',':
+                    cur_pos += 1
+                    report.print(sep)
+                    lexeme = lexeme.next()
+                    continue
+                if parens:
+                    ent = lexeme.ent()
+                    if ent:
+                        report.entity(ent)
+                    report.print(lexeme.text())
+                    if ent:
+                        report.entity()
+                lexeme = lexeme.next()
+        while cur_pos < (len(params) - 1):
+            report.print(sep)
+            cur_pos += 1
+        report.print("\n")
+
+def findlexer(file, lexercache: Dict[str, object]) -> Optional[object]:
+    """
+    Create or retrieve a lexer for a given file.
+    """
+    lexer = None
+    if file in lexercache:
+        lexer = lexercache[file]
+    else:
+        try:
+            lexer = file.lexer()
+            lexercache[file] = lexer
+        except Exception as e:
+            print(f"Exception occurred: {e}")
+    return lexer
